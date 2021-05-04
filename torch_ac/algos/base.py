@@ -98,7 +98,7 @@ class BaseAlgo(ABC):
 
         self.log_episode_return = torch.zeros((self.num_procs, self.n_agents), device=self.device)
         self.log_episode_reshaped_return = torch.zeros((self.num_procs, self.n_agents), device=self.device)
-        self.log_episode_num_frames = torch.zeros((self.num_procs, self.n_agents), device=self.device)
+        self.log_episode_num_frames = torch.zeros((self.num_procs), device=self.device)
 
         self.log_done_counter = 0
         self.log_return = [0] * self.num_procs
@@ -169,19 +169,19 @@ class BaseAlgo(ABC):
 
             self.log_episode_return += torch.tensor(reward, device=self.device, dtype=torch.float)
             self.log_episode_reshaped_return += self.rewards[i]
-            self.log_episode_num_frames += torch.ones((self.num_procs, self.n_agents), device=self.device)
+            self.log_episode_num_frames += torch.ones(self.num_procs, device=self.device)
 
             for i, done_ in enumerate(done):
                 if done_:
                     self.log_done_counter += 1
                     self.log_return.append(torch.sum(self.log_episode_return[i]).item())
                     self.log_reshaped_return.append(torch.sum(self.log_episode_reshaped_return[i]).item())
-                    self.log_num_frames.append(torch.sum(self.log_episode_num_frames[i]).item())
-                    
+                    self.log_num_frames.append(self.log_episode_num_frames[i].item())
+
             mask_tmp = self.mask.unsqueeze(1).repeat(1,self.n_agents).reshape(self.num_procs, self.n_agents)
             self.log_episode_return *= mask_tmp
             self.log_episode_reshaped_return *= mask_tmp
-            self.log_episode_num_frames *= mask_tmp
+            self.log_episode_num_frames *= self.mask
 
         # Add advantage and return to experiences
 
