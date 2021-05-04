@@ -3,6 +3,7 @@ import torch
 
 from torch_ac.format import default_preprocess_obss
 from torch_ac.utils import DictList, ParallelEnv
+import numpy as np
 
 class BaseAlgoMA(ABC):
     """The base class for RL algorithms for multiple agents."""
@@ -108,6 +109,13 @@ class BaseAlgoMA(ABC):
         self.log_reshaped_return = [0] * self.num_procs
         self.log_num_frames = [0] * self.num_procs
 
+    def repeat_experience_per_agent(self, x):
+        # 128 x 16
+        x = x.unsqueeze(-1)
+        x = x.repeat(1, 1, self.n_agents)
+        # 128 x 16 x n
+        return x
+
     def collect_experiences(self):
         """Collects rollouts and computes advantages.
 
@@ -131,6 +139,7 @@ class BaseAlgoMA(ABC):
 
         for i in range(self.num_frames_per_proc):
             # Do one agent-environment interaction
+
             # 32x7x7x6, 16x2x7x7x6                   #16x2x7x7x6
             agent_obs, env_obs = self.preprocess_obss(self.obs, device=self.device)
 
@@ -205,6 +214,7 @@ class BaseAlgoMA(ABC):
             else:
                 _, next_value = self.acmodel(agent_obs, env_obs)
 
+
         for i in reversed(range(self.num_frames_per_proc)):
             next_mask = self.masks[i+1] if i < self.num_frames_per_proc - 1 else self.mask
             next_value = self.values[i+1] if i < self.num_frames_per_proc - 1 else next_value
@@ -226,6 +236,7 @@ class BaseAlgoMA(ABC):
         # 7 x7 x 6
         exps = DictList()
         # 2048 x 2 x 7 x7 x6
+        # import ipdb; ipdb.set_trace()
         obs = [self.obss[i][j]
                     for j in range(self.num_procs)
                     for i in range(self.num_frames_per_proc)]
@@ -247,11 +258,11 @@ class BaseAlgoMA(ABC):
             exps.memory = self.memories.transpose(0, 1).reshape(-1, *self.memories.shape[2:])
             # T x P -> P x T -> (P * T) x 1
             exps.mask = self.masks.transpose(0, 1).reshape(-1).unsqueeze(1)
-
         # for all tensors below, T x P -> P x T -> P * T
-        repeated_values = torch.stack((self.values, self.values), dim=-1)
-        repeated_rewards = torch.stack((self.rewards, self.rewards), dim=-1)
-        repeated_advantages = torch.stack((self.advantages, self.advantages), dim=-1)
+
+        repeated_values = self.repeat_experience_per_agent(self.values)
+        repeated_rewards = self.repeat_experience_per_agent(self.rewards)
+        repeated_advantages = self.repeat_experience_per_agent(self.advantages)
 
         exps.action = self.actions.transpose(0, 1).reshape(-1)
 
@@ -269,8 +280,11 @@ class BaseAlgoMA(ABC):
         # 4096x7x7x6  , # 4096x2x7x7x6
         exps.agent_obs, exps.env_obs = self.preprocess_obss(obs, device=self.device)
 
-        tmp = torch.stack((exps.env_obs.image, exps.env_obs.image), dim=1)
-        exps.env_obs.image = tmp.flatten(start_dim=0, end_dim=1)
+        tmp = exps.env_obs.image.unsqueeze(-1)
+        tmp = tmp.repeat(1, 1, 1, 1, 1, self.n_agents)
+        tmp = tmp.permute(0, 5, 1, 2, 3, 4)
+        tmp = tmp.flatten(start_dim=0, end_dim=1)
+        exps.env_obs.image = tmp
 
         # Log some values
 
