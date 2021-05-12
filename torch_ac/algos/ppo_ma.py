@@ -23,7 +23,14 @@ class PPOAlgoMA(BaseAlgoMA):
 
         assert self.batch_size % self.recurrence == 0
 
-        self.optimizer = torch.optim.Adam(self.acmodel.parameters(), lr, eps=adam_eps)
+        # self.optimizer = torch.optim.Adam(self.acmodel.parameters(), lr, eps=adam_eps)
+        self.optimizer = torch.optim.Adam(
+            [
+                {"params": self.acmodel.image_conv.parameters(), "lr": lr/2},
+            ],
+            lr=lr,
+            eps=adam_eps
+        )      
         self.batch_num = 0
 
     def update_parameters(self, exps):
