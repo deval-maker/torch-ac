@@ -126,7 +126,8 @@ class BaseAlgo(ABC):
         for i in range(self.num_frames_per_proc):
             # Do one agent-environment interaction
 
-            preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
+            # import ipdb; ipdb.set_trace()
+            preprocessed_obs, _ = self.preprocess_obss(self.obs, device=self.device)
             with torch.no_grad():
                 if self.acmodel.recurrent:
                     dist, value, memory = self.acmodel(preprocessed_obs, self.memory * self.mask.unsqueeze(1))
@@ -153,12 +154,13 @@ class BaseAlgo(ABC):
                     for obs_, action_, reward_, done_ in zip(obs, action, reward, done)
                 ], device=self.device)
             else:
-                self.rewards[i] = torch.tensor(reward, device=self.device)
+                reward = torch.sum(torch.tensor(reward, device=self.device), dim=1)
+                self.rewards[i] = reward
             self.log_probs[i] = dist.log_prob(action)
 
             # Update log values
 
-            self.log_episode_return += torch.tensor(reward, device=self.device, dtype=torch.float)
+            self.log_episode_return += reward
             self.log_episode_reshaped_return += self.rewards[i]
             self.log_episode_num_frames += torch.ones(self.num_procs, device=self.device)
 
@@ -175,7 +177,7 @@ class BaseAlgo(ABC):
 
         # Add advantage and return to experiences
 
-        preprocessed_obs = self.preprocess_obss(self.obs, device=self.device)
+        preprocessed_obs, _ = self.preprocess_obss(self.obs, device=self.device)
         with torch.no_grad():
             if self.acmodel.recurrent:
                 _, next_value, _ = self.acmodel(preprocessed_obs, self.memory * self.mask.unsqueeze(1))
@@ -217,7 +219,7 @@ class BaseAlgo(ABC):
 
         # Preprocess experiences
 
-        exps.obs = self.preprocess_obss(exps.obs, device=self.device)
+        exps.obs, _ = self.preprocess_obss(exps.obs, device=self.device)
 
         # Log some values
 

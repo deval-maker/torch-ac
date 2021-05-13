@@ -57,6 +57,7 @@ class PPOAlgoMA(BaseAlgoMA):
                 # Initialize memory
 
                 if self.acmodel.recurrent:
+                    # 256 x 2048
                     memory = exps.memory[inds]
 
                 for i in range(self.recurrence):

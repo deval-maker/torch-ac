@@ -80,14 +80,17 @@ class BaseAlgoMA(ABC):
         
         # 128 x 16
         shape = (self.num_frames_per_proc, self.num_procs)
-        # 128 x 16 x 2, 128 x 32
+        # 128 x 10 x 2, 128 x 32
         new_shape = (self.num_frames_per_proc, self.num_procs, self.n_agents)
 
         self.obs = self.env.reset()
         self.obss = [None]*(shape[0])
         if self.acmodel.recurrent:
-            self.memory = torch.zeros(shape[1], self.acmodel.memory_size, device=self.device)
-            self.memories = torch.zeros(*shape, self.acmodel.memory_size, device=self.device)
+            # 10 x 2 x 2048 -> 20 x 2048
+            self.memory = torch.zeros(new_shape[1]*new_shape[2], self.acmodel.memory_size, device=self.device)
+            self.memories = torch.zeros(*new_shape, self.acmodel.memory_size, device=self.device)
+            # 400 x 10 x 2 x 2048, 400 x 20 x 2048 -> 8000 x 2048
+
         self.mask = torch.ones(shape[1], device=self.device)
         self.masks = torch.zeros(*shape, device=self.device)
 
@@ -108,6 +111,14 @@ class BaseAlgoMA(ABC):
         self.log_return = [0] * self.num_procs
         self.log_reshaped_return = [0] * self.num_procs
         self.log_num_frames = [0] * self.num_procs
+
+    def reset_memory(self):
+
+        new_shape = (self.num_frames_per_proc, self.num_procs, self.n_agents)
+        if self.acmodel.recurrent:
+            # 10 x 2 x 2048 -> 20 x 2048
+            self.memory = torch.zeros(new_shape[1]*new_shape[2], self.acmodel.memory_size, device=self.device)
+            self.memories = torch.zeros(*new_shape, self.acmodel.memory_size, device=self.device)        
 
     def repeat_experience_per_agent(self, x):
         # 128 x 16
@@ -144,8 +155,12 @@ class BaseAlgoMA(ABC):
             agent_obs, env_obs = self.preprocess_obss(self.obs, device=self.device)
 
             with torch.no_grad():
-                if self.acmodel.recurrent:           
-                    dist, value, memory = self.acmodel(agent_obs, env_obs, self.memory * self.mask.unsqueeze(1))
+                if self.acmodel.recurrent:
+                    # 10 x 2 x 2048 , 20 x 2048       
+                    # dist, value, memory = self.acmodel(agent_obs, env_obs, self.memory * self.mask.unsqueeze(1))
+                    # tmp = torch.einsum('ijk,ij->ijk', self.memory, self.mask.unsqueeze(1).repeat(1, self.n_agents))
+                    tmp = (self.mask.unsqueeze(1).repeat(1, self.n_agents)).reshape(-1).unsqueeze(1) # [20]
+                    dist, value, memory = self.acmodel(agent_obs, env_obs, self.memory*tmp)
                 else:
                     dist, value = self.acmodel(agent_obs, env_obs)
             action = dist.sample()
@@ -158,8 +173,9 @@ class BaseAlgoMA(ABC):
             self.obss[i] = self.obs
             self.obs = obs
             if self.acmodel.recurrent:
-                self.memories[i] = self.memory
+                self.memories[i] = self.memory.reshape(-1, self.n_agents, self.memory.shape[-1])
                 self.memory = memory
+            # import ipdb; ipdb.set_trace()
             self.masks[i] = self.mask
             self.mask = 1 - torch.tensor(done, device=self.device, dtype=torch.float)
             self.actions[i] = action
@@ -210,7 +226,8 @@ class BaseAlgoMA(ABC):
         agent_obs, env_obs = self.preprocess_obss(self.obs, device=self.device)
         with torch.no_grad():
             if self.acmodel.recurrent:
-                _, next_value, _ = self.acmodel(agent_obs, env_obs, self.memory * self.mask.unsqueeze(1))
+                tmp = (self.mask.unsqueeze(1).repeat(1, self.n_agents)).reshape(-1).unsqueeze(1) # [20]
+                _, next_value, _ = self.acmodel(agent_obs, env_obs, self.memory*tmp)
             else:
                 _, next_value = self.acmodel(agent_obs, env_obs)
 
@@ -252,12 +269,12 @@ class BaseAlgoMA(ABC):
         #             for i in range(self.num_frames_per_proc)]
 
         # exp.env_obs = []
-        # import ipdb; ipdb.set_trace()
         if self.acmodel.recurrent:
-            # T x P x D -> P x T x D -> (P * T) x D
-            exps.memory = self.memories.transpose(0, 1).reshape(-1, *self.memories.shape[2:])
+            # T x P x D -> P x T x D -> (P * T) x D # 8000(10 x 2 x 400) x 2048
+            exps.memory = self.memories.transpose(0, 1).reshape(-1, self.memories.shape[3])
             # T x P -> P x T -> (P * T) x 1
-            exps.mask = self.masks.transpose(0, 1).reshape(-1).unsqueeze(1)
+            tmp = self.masks.unsqueeze(-1).repeat(1, 1, self.n_agents)
+            exps.mask = tmp.transpose(0, 1).reshape(-1).unsqueeze(1)
         # for all tensors below, T x P -> P x T -> P * T
 
         repeated_values = self.repeat_experience_per_agent(self.values)
