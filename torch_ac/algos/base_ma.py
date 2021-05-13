@@ -84,7 +84,11 @@ class BaseAlgoMA(ABC):
         new_shape = (self.num_frames_per_proc, self.num_procs, self.n_agents)
 
         self.obs = self.env.reset()
-        self.obss = [None]*(shape[0])
+        # self.obss = [None]*(shape[0])
+
+        # 400 x 10 x 2 x 13 x 13 x 7
+        self.obss = np.zeros((*new_shape[0:2], *self.env.envs[0].observation_space.spaces["image"].shape))
+
         if self.acmodel.recurrent:
             # 10 x 2 x 2048 -> 20 x 2048
             self.memory = torch.zeros(new_shape[1]*new_shape[2], self.acmodel.memory_size, device=self.device)
@@ -151,7 +155,7 @@ class BaseAlgoMA(ABC):
         for i in range(self.num_frames_per_proc):
             # Do one agent-environment interaction
 
-            # 32x7x7x6, 16x2x7x7x6                   #16x2x7x7x6
+            # 32x7x7x6, 16x2x7x7x6                   #10x2x13x13x7
             agent_obs, env_obs = self.preprocess_obss(self.obs, device=self.device)
 
             with torch.no_grad():
@@ -170,7 +174,8 @@ class BaseAlgoMA(ABC):
 
             # Update experiences values
 
-            self.obss[i] = self.obs
+            # self.obss[i] = self.obs
+            self.obss[i] = np.array([ob["image"] for ob in obs])
             self.obs = obs
             if self.acmodel.recurrent:
                 self.memories[i] = self.memory.reshape(-1, self.n_agents, self.memory.shape[-1])
@@ -212,7 +217,7 @@ class BaseAlgoMA(ABC):
                     self.log_reshaped_return.append(torch.sum(self.log_episode_reshaped_return[i]).item())
                     self.log_num_frames.append(torch.sum(self.log_episode_num_frames[i]).item())
                     
-            mask_tmp = self.mask.unsqueeze(1).repeat(1,self.n_agents).reshape(self.num_procs, self.n_agents)
+            mask_tmp = self.mask.unsqueeze(1).repeat(1, self.n_agents).reshape(self.num_procs, self.n_agents)
             self.log_episode_return *= mask_tmp
             self.log_episode_reshaped_return *= self.mask
             self.log_episode_num_frames *= mask_tmp
@@ -253,10 +258,9 @@ class BaseAlgoMA(ABC):
         # 7 x7 x 6
         exps = DictList()
         # 2048 x 2 x 7 x7 x6
-        # import ipdb; ipdb.set_trace()
-        obs = [self.obss[i][j]
-                    for j in range(self.num_procs)
-                    for i in range(self.num_frames_per_proc)]
+        # obs = [self.obss[i][j]
+        #             for j in range(self.num_procs)
+        #             for i in range(self.num_frames_per_proc)]
 
         # exps.agent_obs = [self.obss[i][j][k]
         #             for k in range(self.n_agents)
@@ -271,38 +275,50 @@ class BaseAlgoMA(ABC):
         # exp.env_obs = []
         if self.acmodel.recurrent:
             # T x P x D -> P x T x D -> (P * T) x D # 8000(10 x 2 x 400) x 2048
-            exps.memory = self.memories.transpose(0, 1).reshape(-1, self.memories.shape[3])
+            # exps.memory = self.memories.transpose(0, 1).reshape(-1, self.memories.shape[3])
+            exps.memory = self.memories.permute(1, 2, 0, 3).reshape(-1, self.memories.shape[3])
             # T x P -> P x T -> (P * T) x 1
             tmp = self.masks.unsqueeze(-1).repeat(1, 1, self.n_agents)
-            exps.mask = tmp.transpose(0, 1).reshape(-1).unsqueeze(1)
+            # exps.mask = tmp.transpose(0, 1).reshape(-1).unsqueeze(1)
+            exps.mask = tmp.permute(1, 2, 0).reshape(-1).unsqueeze(1)
+
         # for all tensors below, T x P -> P x T -> P * T
 
         repeated_values = self.repeat_experience_per_agent(self.values)
         repeated_rewards = self.repeat_experience_per_agent(self.rewards)
         repeated_advantages = self.repeat_experience_per_agent(self.advantages)
 
-        exps.action = self.actions.transpose(0, 1).reshape(-1)
+        # exps.action = self.actions.transpose(0, 1).reshape(-1)
+        exps.action = self.actions.permute(1, 2, 0).reshape(-1)
 
-        exps.value = repeated_values.transpose(0, 1).reshape(-1)
-        exps.reward = repeated_rewards.transpose(0, 1).reshape(-1)
-        exps.advantage = repeated_advantages.transpose(0, 1).reshape(-1)
-        # exps.value = self.values.transpose(0, 1).reshape(-1)
-        # exps.reward = self.rewards.transpose(0, 1).reshape(-1)
-        # exps.advantage = self.advantages.transpose(0, 1).reshape(-1)
+        exps.value = repeated_values.permute(1, 2, 0).reshape(-1)
+        exps.reward = repeated_rewards.permute(1, 2, 0).reshape(-1)
+        exps.advantage = repeated_advantages.permute(1, 2, 0).reshape(-1)
+
         exps.returnn = exps.value + exps.advantage
-        exps.log_prob = self.log_probs.transpose(0, 1).reshape(-1)
+        exps.log_prob = self.log_probs.permute(1, 2, 0).reshape(-1)
 
         # Preprocess experiences
 
         # 4096x7x7x6  , # 4096x2x7x7x6
-        exps.agent_obs, exps.env_obs = self.preprocess_obss(obs, device=self.device)
+        # import ipdb; ipdb.set_trace()
+        # exps.agent_obs, exps.env_obs = self.preprocess_obss(obs, device=self.device)
+        
+        obss = torch.tensor(self.obss, device=self.device, dtype=torch.float)
+        # exps.agent_obs = np.transpose(self.obss, (1, 2, 0, 3, 4, 5)).reshape(-1, *self.obss.shape[3:])
+        exps.agent_obs = obss.permute(1,2,0,3,4,5).reshape(-1, *obss.shape[3:])
 
-        tmp = exps.env_obs.image.unsqueeze(-1)
-        tmp = tmp.repeat(1, 1, 1, 1, 1, self.n_agents)
-        tmp = tmp.permute(0, 5, 1, 2, 3, 4)
-        tmp = tmp.flatten(start_dim=0, end_dim=1)
-        exps.env_obs.image = tmp
+        # tmp = exps.env_obs.image.unsqueeze(-1)
+        # tmp = tmp.repeat(1, 1, 1, 1, 1, self.n_agents)
+        # tmp = tmp.permute(0, 5, 1, 2, 3, 4)
+        # tmp = tmp.flatten(start_dim=0, end_dim=1)
+        # exps.env_obs.image = tmp
 
+        tmp = obss.transpose(0,1)
+        tmp = tmp.unsqueeze(2).repeat(1,1,2,1,1,1,1)
+        tmp = tmp.transpose(1,2)
+        tmp = tmp.flatten(start_dim=0, end_dim=2)
+        exps.env_obs = tmp
         # Log some values
 
         keep = max(self.log_done_counter, self.num_procs)
